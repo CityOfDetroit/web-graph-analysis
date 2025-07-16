@@ -1,0 +1,225 @@
+"""
+Web scraping functionality for link graph generation.
+
+This module provides web scraping capabilities with breadth-first traversal
+and link extraction from HTML pages.
+"""
+
+import logging
+import time
+from collections import deque
+from typing import Dict, List, Optional, Set
+from urllib.parse import urljoin, urlparse
+
+import requests
+from bs4 import BeautifulSoup
+
+from .url_handler import URLNormalizer, URLFilter
+
+
+class WebScraper:
+    """Handles web scraping and link extraction."""
+    
+    def __init__(self, base_url: str, max_depth: int, url_filter: URLFilter, 
+                 allow_cycles: bool = True, delay: float = 1.0, timeout: int = 10):
+        """
+        Initialize web scraper.
+        
+        Args:
+            base_url: Starting URL for crawling
+            max_depth: Maximum depth to crawl
+            url_filter: URL filter instance
+            allow_cycles: Whether to allow cycles in the graph
+            delay: Delay between requests in seconds
+            timeout: Request timeout in seconds
+        """
+        self.base_url = URLNormalizer.normalize_url(base_url)
+        self.max_depth = max_depth
+        self.url_filter = url_filter
+        self.allow_cycles = allow_cycles
+        self.delay = delay
+        self.timeout = timeout
+        self.base_domain = urlparse(self.base_url).netloc
+        
+        # Initialize session with headers
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (compatible; WebGraphGenerator/1.0)',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive'
+        })
+        
+        # Statistics
+        self.pages_scraped = 0
+        self.failed_requests = 0
+        self.total_links_found = 0
+    
+    def extract_links(self, html_content: str, current_url: str) -> List[str]:
+        """
+        Extract all links from HTML content.
+        
+        Args:
+            html_content: HTML content to parse
+            current_url: Current page URL for resolving relative links
+            
+        Returns:
+            List of normalized URLs
+        """
+        try:
+            soup = BeautifulSoup(html_content, 'html.parser')
+            links = []
+            
+            # Extract links from <a> tags
+            for link in soup.find_all('a', href=True):
+                href = link['href']
+                # Skip empty hrefs and javascript/mailto links
+                if not href or href.startswith(('javascript:', 'mailto:', 'tel:')):
+                    continue
+                
+                # Resolve relative URLs
+                absolute_url = urljoin(current_url, href)
+                normalized_url = URLNormalizer.normalize_url(absolute_url)
+                
+                # Filter URLs
+                if (URLNormalizer.is_valid_url(normalized_url, self.base_domain) and
+                    not self.url_filter.should_skip(normalized_url)):
+                    links.append(normalized_url)
+            
+            # Remove duplicates while preserving order
+            unique_links = []
+            seen = set()
+            for link in links:
+                if link not in seen:
+                    unique_links.append(link)
+                    seen.add(link)
+            
+            self.total_links_found += len(unique_links)
+            return unique_links
+            
+        except Exception as e:
+            logging.error(f"Error extracting links from {current_url}: {e}")
+            return []
+    
+    def fetch_page(self, url: str) -> Optional[str]:
+        """
+        Fetch a single web page.
+        
+        Args:
+            url: URL to fetch
+            
+        Returns:
+            HTML content or None if failed
+        """
+        try:
+            response = self.session.get(url, timeout=self.timeout)
+            response.raise_for_status()
+            
+            # Check content type
+            content_type = response.headers.get('content-type', '').lower()
+            if not content_type.startswith('text/html'):
+                logging.warning(f"Skipping non-HTML content at {url}: {content_type}")
+                return None
+            
+            return response.text
+            
+        except requests.exceptions.Timeout:
+            logging.warning(f"Timeout fetching {url}")
+            self.failed_requests += 1
+            return None
+        except requests.exceptions.ConnectionError:
+            logging.warning(f"Connection error fetching {url}")
+            self.failed_requests += 1
+            return None
+        except requests.exceptions.HTTPError as e:
+            logging.warning(f"HTTP error fetching {url}: {e}")
+            self.failed_requests += 1
+            return None
+        except requests.RequestException as e:
+            logging.warning(f"Request error fetching {url}: {e}")
+            self.failed_requests += 1
+            return None
+    
+    def scrape(self) -> Dict[str, List[str]]:
+        """
+        Scrape web pages and extract links using BFS.
+        
+        Returns:
+            Dictionary mapping URLs to lists of linked URLs
+        """
+        graph_data = {}
+        visited = set()
+        queue = deque([(self.base_url, 0)])  # (url, depth)
+        
+        logging.info(f"Starting scrape from {self.base_url} (max depth: {self.max_depth})")
+        
+        while queue:
+            current_url, depth = queue.popleft()
+            
+            if depth > self.max_depth:
+                continue
+                
+            if not self.allow_cycles and current_url in visited:
+                continue
+                
+            if current_url in visited:
+                # For cycles allowed, still track the link but don't re-scrape
+                if current_url not in graph_data:
+                    graph_data[current_url] = []
+                continue
+            
+            visited.add(current_url)
+            self.pages_scraped += 1
+            
+            logging.info(f"Scraping (depth {depth}): {current_url}")
+            
+            # Fetch page content
+            html_content = self.fetch_page(current_url)
+            if html_content is None:
+                graph_data[current_url] = []
+                continue
+            
+            # Extract links
+            links = self.extract_links(html_content, current_url)
+            graph_data[current_url] = links
+            
+            logging.debug(f"Found {len(links)} links on {current_url}")
+            
+            # Add new links to queue for next depth level
+            if depth < self.max_depth:
+                for link in links:
+                    if self.allow_cycles or link not in visited:
+                        queue.append((link, depth + 1))
+            
+            # Be respectful with delays
+            if self.delay > 0:
+                time.sleep(self.delay)
+        
+        self._log_statistics(graph_data)
+        return graph_data
+    
+    def _log_statistics(self, graph_data: Dict[str, List[str]]) -> None:
+        """Log scraping statistics."""
+        logging.info(f"Scraping complete!")
+        logging.info(f"  Pages scraped: {self.pages_scraped}")
+        logging.info(f"  Failed requests: {self.failed_requests}")
+        logging.info(f"  Total links found: {self.total_links_found}")
+        logging.info(f"  Unique pages in graph: {len(graph_data)}")
+    
+    def get_statistics(self) -> Dict[str, int]:
+        """
+        Get scraping statistics.
+        
+        Returns:
+            Dictionary with scraping statistics
+        """
+        return {
+            'pages_scraped': self.pages_scraped,
+            'failed_requests': self.failed_requests,
+            'total_links_found': self.total_links_found
+        }
+    
+    def close(self) -> None:
+        """Close the session."""
+        self.session.close()
