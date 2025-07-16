@@ -1,42 +1,41 @@
 """
 Graph visualization utilities for web link analysis.
 
-This module provides functionality to create visual representations of web link graphs.
+This module provides functionality to create interactive HTML visualizations of web link graphs.
 """
 
 import logging
-import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
-import matplotlib.pyplot as plt
 import networkx as nx
-from matplotlib.colors import LinearSegmentedColormap
-import numpy as np
 
 # Import plotly for interactive visualizations
 try:
     import plotly.graph_objects as go
-    import plotly.express as px
     PLOTLY_AVAILABLE = True
 except ImportError:
     PLOTLY_AVAILABLE = False
+    raise ImportError("Plotly is required for visualizations. Install with: pip install plotly")
 
 
 class GraphVisualizer:
-    """Handles graph visualization and image generation."""
+    """Handles interactive graph visualization using Plotly."""
     
-    def __init__(self, graph: nx.DiGraph, title: Optional[str] = None):
+    def __init__(self, graph: nx.DiGraph, base_url: str, metadata: Optional[Dict] = None):
         """
         Initialize graph visualizer.
         
         Args:
             graph: NetworkX DiGraph to visualize
-            title: Optional title for the visualization
+            base_url: Base URL used for scraping
+            metadata: Optional metadata about scraping parameters
         """
         self.graph = graph
-        self.title = title or f"Web Link Graph ({graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges)"
+        self.base_url = base_url
+        self.metadata = metadata or {}
+        self.title = f"Link Graph for {base_url}"
         
         # Color schemes
         self.color_schemes = {
@@ -49,52 +48,9 @@ class GraphVisualizer:
     def create_visualization(self, output_path: str, layout: str = 'spring',
                            color_scheme: str = 'default', 
                            node_size_metric: str = 'constant',
-                           show_labels: bool = None,
-                           figsize: Tuple[int, int] = (16, 12),
-                           dpi: int = 300) -> None:
+                           show_labels: bool = None) -> None:
         """
-        Create and save graph visualization.
-        
-        Args:
-            output_path: Path to save the image (format detected from extension)
-            layout: Layout algorithm ('spring', 'circular', 'shell', 'kamada_kawai')
-            color_scheme: Color scheme ('default', 'degree', 'pagerank', 'depth')
-            node_size_metric: Node sizing metric ('constant', 'degree', 'pagerank')
-            show_labels: Whether to show node labels (auto-detect if None)
-            figsize: Figure size in inches (for static plots)
-            dpi: Resolution for raster formats
-            
-        Raises:
-            ValueError: If layout or color scheme is invalid
-            IOError: If visualization cannot be saved
-        """
-        # Determine output format from file extension
-        file_extension = Path(output_path).suffix.lower()
-        
-        if file_extension == '.html':
-            self.create_interactive_visualization(
-                output_path=output_path,
-                layout=layout,
-                color_scheme=color_scheme,
-                node_size_metric=node_size_metric,
-                show_labels=show_labels
-            )
-        else:
-            self.create_static_visualization(
-                output_path=output_path,
-                layout=layout,
-                color_scheme=color_scheme,
-                node_size_metric=node_size_metric,
-                show_labels=show_labels,
-                figsize=figsize,
-                dpi=dpi
-            )
-    def create_interactive_visualization(self, output_path: str, layout: str = 'spring',
-                                       color_scheme: str = 'default', 
-                                       node_size_metric: str = 'constant',
-                                       show_labels: bool = None) -> None:
-        """
-        Create interactive HTML visualization using Plotly.
+        Create and save interactive HTML graph visualization.
         
         Args:
             output_path: Path to save the HTML file
@@ -107,265 +63,183 @@ class GraphVisualizer:
             ValueError: If layout or color scheme is invalid
             IOError: If visualization cannot be saved
         """
-        if not PLOTLY_AVAILABLE:
-            raise ImportError("Plotly is required for interactive visualizations. Install with: pip install plotly")
+        # Validate inputs
+        valid_layouts = ['spring', 'circular', 'shell', 'kamada_kawai', 'random']
+        if layout not in valid_layouts:
+            raise ValueError(f"Invalid layout: {layout}. Valid options: {valid_layouts}")
         
-        try:
-            # Validate inputs
-            valid_layouts = ['spring', 'circular', 'shell', 'kamada_kawai', 'random']
-            if layout not in valid_layouts:
-                raise ValueError(f"Invalid layout: {layout}. Valid options: {valid_layouts}")
-            
-            if color_scheme not in self.color_schemes:
-                raise ValueError(f"Invalid color scheme: {color_scheme}. Valid options: {list(self.color_schemes.keys())}")
-            
-            # Ensure output directory exists
-            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-            
-            # Generate layout
-            pos = self._generate_layout(layout)
-            
-            # Auto-detect label display
-            if show_labels is None:
-                show_labels = self.graph.number_of_nodes() <= 50
-            
-            # Get node positions
-            node_x = [pos[node][0] for node in self.graph.nodes()]
-            node_y = [pos[node][1] for node in self.graph.nodes()]
-            
-            # Get edge positions
-            edge_x = []
-            edge_y = []
-            for edge in self.graph.edges():
-                x0, y0 = pos[edge[0]]
-                x1, y1 = pos[edge[1]]
-                edge_x.extend([x0, x1, None])
-                edge_y.extend([y0, y1, None])
-            
-            # Create edge trace
-            edge_trace = go.Scatter(
-                x=edge_x, y=edge_y,
-                line=dict(width=1, color='#888'),
-                hoverinfo='none',
-                mode='lines',
-                showlegend=False
-            )
-            
-            # Get node properties
-            node_colors = self._get_plotly_node_colors(color_scheme)
-            node_sizes = self._get_plotly_node_sizes(node_size_metric)
-            
-            # Create hover text with full URL and metrics
-            hover_text = []
+        if color_scheme not in self.color_schemes:
+            raise ValueError(f"Invalid color scheme: {color_scheme}. Valid options: {list(self.color_schemes.keys())}")
+        
+        # Ensure output directory exists
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        
+        # Generate layout
+        pos = self._generate_layout(layout)
+        
+        # Auto-detect label display
+        if show_labels is None:
+            show_labels = self.graph.number_of_nodes() <= 50
+        
+        # Get node positions
+        node_x = [pos[node][0] for node in self.graph.nodes()]
+        node_y = [pos[node][1] for node in self.graph.nodes()]
+        
+        # Get edge positions
+        edge_x = []
+        edge_y = []
+        for edge in self.graph.edges():
+            x0, y0 = pos[edge[0]]
+            x1, y1 = pos[edge[1]]
+            edge_x.extend([x0, x1, None])
+            edge_y.extend([y0, y1, None])
+        
+        # Create edge trace
+        edge_trace = go.Scatter(
+            x=edge_x, y=edge_y,
+            line=dict(width=1, color='#888'),
+            hoverinfo='none',
+            mode='lines',
+            showlegend=False
+        )
+        
+        # Get node properties
+        node_colors = self._get_node_colors(color_scheme)
+        node_sizes = self._get_node_sizes(node_size_metric)
+        
+        # Create hover text with full URL and metrics
+        hover_text = []
+        for node in self.graph.nodes():
+            in_degree = self.graph.in_degree(node)
+            out_degree = self.graph.out_degree(node)
+            hover_info = f"<b>{node}</b><br>"
+            hover_info += f"In-degree: {in_degree}<br>"
+            hover_info += f"Out-degree: {out_degree}<br>"
+            hover_info += f"<i>Click to visit page</i>"
+            hover_text.append(hover_info)
+        
+        # Create node labels
+        node_labels = []
+        if show_labels:
             for node in self.graph.nodes():
-                in_degree = self.graph.in_degree(node)
-                out_degree = self.graph.out_degree(node)
-                hover_info = f"<b>{node}</b><br>"
-                hover_info += f"In-degree: {in_degree}<br>"
-                hover_info += f"Out-degree: {out_degree}<br>"
-                hover_info += f"<i>Click to visit page</i>"
-                hover_text.append(hover_info)
-            
-            # Create node labels
-            node_labels = []
-            if show_labels:
-                for node in self.graph.nodes():
-                    abbreviated_url = self._abbreviate_url(node)
-                    node_labels.append(abbreviated_url)
-            else:
-                node_labels = [''] * len(list(self.graph.nodes()))
-            
-            # Create node trace
-            node_trace = go.Scatter(
-                x=node_x, y=node_y,
-                mode='markers+text' if show_labels else 'markers',
-                hoverinfo='text',
-                hovertext=hover_text,
-                text=node_labels,
-                textposition="middle center",
-                textfont=dict(size=10, color='black'),
-                customdata=list(self.graph.nodes()),  # Store URLs for click events
-                marker=dict(
-                    size=node_sizes,
-                    color=node_colors,
-                    colorscale='Viridis' if color_scheme == 'pagerank' else 'YlOrRd',
-                    showscale=color_scheme in ['degree', 'pagerank'],
-                    line=dict(width=2, color='black')
-                ),
-                showlegend=False
-            )
-            
-            # Create figure
-            fig = go.Figure(data=[edge_trace, node_trace])
-            
-            # Update layout
-            fig.update_layout(
-                title=dict(
-                    text=self.title,
-                    x=0.5,
-                    font=dict(size=16)
-                ),
-                showlegend=False,
-                hovermode='closest',
-                margin=dict(b=20, l=5, r=5, t=40),
-                annotations=[
-                    dict(
-                        text="Click nodes to visit pages. Hover for details.",
-                        showarrow=False,
-                        xref="paper", yref="paper",
-                        x=0.005, y=-0.002,
-                        xanchor="left", yanchor="bottom",
-                        font=dict(color="#888", size=12)
-                    )
-                ],
-                xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                plot_bgcolor='white'
-            )
-            
-            # Add JavaScript for click events (opens URLs in new tab)
-            click_script = """
-            <script>
-            document.addEventListener('DOMContentLoaded', function() {
-                var plotDiv = document.getElementsByClassName('plotly-graph-div')[0];
-                plotDiv.on('plotly_click', function(data) {
-                    var point = data.points[0];
-                    if (point.customdata) {
-                        window.open(point.customdata, '_blank');
-                    }
-                });
-            });
-            </script>
-            """
-            
-            # Save to HTML with click functionality
-            html_content = fig.to_html(include_plotlyjs=True, config={'displayModeBar': True})
-            
-            # Inject click script
-            html_content = html_content.replace('</body>', f'{click_script}</body>')
-            
-            with open(output_path, 'w', encoding='utf-8') as f:
-                f.write(html_content)
-            
-            logging.info(f"Interactive graph visualization saved to {output_path}")
-            
-        except Exception as e:
-            logging.error(f"Failed to create interactive visualization: {e}")
-            raise IOError(f"Could not create interactive visualization: {e}")
-    
-    def create_static_visualization(self, output_path: str, layout: str = 'spring',
-                                  color_scheme: str = 'default', 
-                                  node_size_metric: str = 'constant',
-                                  show_labels: bool = None,
-                                  figsize: Tuple[int, int] = (16, 12),
-                                  dpi: int = 300) -> None:
-        """
-        Create static visualization using matplotlib (original implementation).
+                abbreviated_url = self._abbreviate_url(node)
+                node_labels.append(abbreviated_url)
+        else:
+            node_labels = [''] * len(list(self.graph.nodes()))
         
-        Args:
-            output_path: Path to save the image file
-            layout: Layout algorithm ('spring', 'circular', 'shell', 'kamada_kawai')
-            color_scheme: Color scheme ('default', 'degree', 'pagerank', 'depth')
-            node_size_metric: Node sizing metric ('constant', 'degree', 'pagerank')
-            show_labels: Whether to show node labels (auto-detect if None)
-            figsize: Figure size in inches
-            dpi: Resolution for raster formats
-            
-        Raises:
-            ValueError: If layout or color scheme is invalid
-            IOError: If visualization cannot be saved
-        """
-        try:
-            # Validate inputs
-            valid_layouts = ['spring', 'circular', 'shell', 'kamada_kawai', 'random']
-            if layout not in valid_layouts:
-                raise ValueError(f"Invalid layout: {layout}. Valid options: {valid_layouts}")
-            
-            if color_scheme not in self.color_schemes:
-                raise ValueError(f"Invalid color scheme: {color_scheme}. Valid options: {list(self.color_schemes.keys())}")
-            
-            # Ensure output directory exists
-            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-            
-            # Create figure
-            plt.figure(figsize=figsize, dpi=dpi)
-            
-            # Generate layout
-            pos = self._generate_layout(layout)
-            
-            # Determine node colors and sizes
-            node_colors = self._get_node_colors(color_scheme)
-            node_sizes = self._get_node_sizes(node_size_metric)
-            
-            # Determine edge properties
-            edge_widths = self._get_edge_widths()
-            edge_colors = self._get_edge_colors()
-            
-            # Auto-detect label display
-            if show_labels is None:
-                show_labels = self.graph.number_of_nodes() <= 25
-            
-            # Draw nodes
-            nx.draw_networkx_nodes(
-                self.graph, pos,
-                node_color=node_colors,
-                node_size=node_sizes,
-                alpha=0.8,
-                linewidths=1,
-                edgecolors='black'
-            )
-            
-            # Draw edges
-            nx.draw_networkx_edges(
-                self.graph, pos,
-                width=edge_widths,
-                alpha=0.6,
-                arrows=True,
-                arrowsize=20,
-                arrowstyle='->',
-                edge_color=edge_colors,
-                connectionstyle='arc3,rad=0.1'
-            )
-            
-            # Draw labels if requested
-            if show_labels:
-                labels = self._generate_static_labels()
-                nx.draw_networkx_labels(
-                    self.graph, pos,
-                    labels,
-                    font_size=8,
-                    font_weight='bold',
-                    font_color='black'
+        # Create node trace
+        node_trace = go.Scatter(
+            x=node_x, y=node_y,
+            mode='markers+text' if show_labels else 'markers',
+            hoverinfo='text',
+            hovertext=hover_text,
+            text=node_labels,
+            textposition="middle center",
+            textfont=dict(size=10, color='black'),
+            customdata=list(self.graph.nodes()),  # Store URLs for click events
+            marker=dict(
+                size=node_sizes,
+                color=node_colors,
+                colorscale='Viridis' if color_scheme == 'pagerank' else 'YlOrRd',
+                showscale=color_scheme in ['degree', 'pagerank'],
+                line=dict(width=2, color='black')
+            ),
+            showlegend=False
+        )
+        
+        # Create metadata annotation
+        metadata_text = self._create_metadata_text()
+        
+        # Create figure
+        fig = go.Figure(data=[edge_trace, node_trace])
+        
+        # Update layout
+        fig.update_layout(
+            title=dict(
+                text=self.title,
+                x=0.5,
+                font=dict(size=16)
+            ),
+            showlegend=False,
+            hovermode='closest',
+            margin=dict(b=80, l=5, r=5, t=40),  # Increased bottom margin for metadata
+            annotations=[
+                dict(
+                    text="Click nodes to visit pages. Hover for details.",
+                    showarrow=False,
+                    xref="paper", yref="paper",
+                    x=0.5, y=-0.02,
+                    xanchor="center", yanchor="top",
+                    font=dict(color="#888", size=12)
+                ),
+                dict(
+                    text=metadata_text,
+                    showarrow=False,
+                    xref="paper", yref="paper",
+                    x=0.005, y=0.005,
+                    xanchor="left", yanchor="bottom",
+                    font=dict(color="#666", size=10),
+                    bgcolor="rgba(255,255,255,0.8)",
+                    bordercolor="#ccc",
+                    borderwidth=1
                 )
-            
-            # Add title and metadata
-            plt.title(self.title, fontsize=16, fontweight='bold', pad=20)
-            
-            # Add legend if using special color schemes
-            if color_scheme in ['degree', 'pagerank']:
-                self._add_colorbar(color_scheme)
-            
-            # Remove axes
-            plt.axis('off')
-            plt.tight_layout()
-            
-            # Save the visualization
-            file_format = Path(output_path).suffix.lower().lstrip('.')
-            if file_format == 'svg':
-                plt.savefig(output_path, format='svg', bbox_inches='tight', dpi=dpi)
-            elif file_format in ['png', 'jpg', 'jpeg', 'pdf']:
-                plt.savefig(output_path, format=file_format, bbox_inches='tight', dpi=dpi)
-            else:
-                # Default to SVG
-                plt.savefig(output_path, format='svg', bbox_inches='tight', dpi=dpi)
-            
-            plt.close()
-            
-            logging.info(f"Static graph visualization saved to {output_path}")
-            
-        except Exception as e:
-            logging.error(f"Failed to create static visualization: {e}")
-            raise IOError(f"Could not create static visualization: {e}")
+            ],
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            plot_bgcolor='white'
+        )
+        
+        # Add JavaScript for click events (opens URLs in new tab)
+        click_script = """
+        <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            var plotDiv = document.getElementsByClassName('plotly-graph-div')[0];
+            plotDiv.on('plotly_click', function(data) {
+                var point = data.points[0];
+                if (point.customdata) {
+                    window.open(point.customdata, '_blank');
+                }
+            });
+        });
+        </script>
+        """
+        
+        # Save to HTML with click functionality
+        html_content = fig.to_html(include_plotlyjs=True, config={'displayModeBar': True})
+        
+        # Inject click script
+        html_content = html_content.replace('</body>', f'{click_script}</body>')
+        
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(html_content)
+        
+        logging.info(f"Interactive graph visualization saved to {output_path}")
+    
+    def _create_metadata_text(self) -> str:
+        """
+        Create metadata text for display in the visualization.
+        
+        Returns:
+            Formatted metadata text string
+        """
+        lines = []
+        
+        # Add search depth
+        max_depth = self.metadata.get('max_depth', 'None')
+        lines.append(f"<b>Search Depth</b>:<br> {max_depth}")
+        
+        # Add URL regex patterns info
+        url_patterns = self.metadata.get('url_patterns', 'None')
+        lines.append(f"<b>URL Filters</b>:<br> {url_patterns}")
+        
+        # Add CSS selectors info
+        css_selectors = self.metadata.get('css_selectors', 'None')
+        lines.append(f"<b>CSS Filters</b>:<br> {css_selectors}")
+
+        # Add graph stats
+        lines.append(f"<b>Nodes:</b> {self.graph.number_of_nodes()}, <b>Edges:</b> {self.graph.number_of_edges()}")
+        
+        return "<br>".join(lines)
     
     def _generate_layout(self, layout: str) -> Dict[str, Tuple[float, float]]:
         """
@@ -393,71 +267,48 @@ class GraphVisualizer:
         else:
             return nx.spring_layout(self.graph, seed=42)
     
-    def _get_node_colors(self, color_scheme: str) -> List[str]:
+    def _get_node_colors(self, color_scheme: str) -> List[float]:
         """
-        Get node colors based on color scheme.
+        Get node colors for Plotly visualization.
         
         Args:
             color_scheme: Color scheme name
             
         Returns:
-            List of colors for nodes
+            List of color values for nodes
         """
         if color_scheme == 'default':
-            return ['lightblue'] * self.graph.number_of_nodes()
+            return [0.5] * self.graph.number_of_nodes()
         
         elif color_scheme == 'degree':
             degrees = dict(self.graph.degree())
             max_degree = max(degrees.values()) if degrees else 1
-            
-            # Create color map based on degree
-            colors = []
-            for node in self.graph.nodes():
-                degree_ratio = degrees[node] / max_degree
-                # Use a color gradient from light blue to dark red
-                colors.append(plt.cm.YlOrRd(degree_ratio))
-            return colors
+            return [degrees[node] / max_degree for node in self.graph.nodes()]
         
         elif color_scheme == 'pagerank':
             try:
                 pagerank = nx.pagerank(self.graph)
                 max_pr = max(pagerank.values()) if pagerank else 1
-                
-                colors = []
-                for node in self.graph.nodes():
-                    pr_ratio = pagerank[node] / max_pr
-                    colors.append(plt.cm.viridis(pr_ratio))
-                return colors
+                return [pagerank[node] / max_pr for node in self.graph.nodes()]
             except:
-                # Fallback to default if PageRank fails
-                return ['lightblue'] * self.graph.number_of_nodes()
+                return [0.5] * self.graph.number_of_nodes()
         
         elif color_scheme == 'depth':
-            # Color nodes by their distance from the most central node
             try:
-                # Find the node with highest betweenness centrality
                 centrality = nx.betweenness_centrality(self.graph)
                 central_node = max(centrality.keys(), key=lambda x: centrality[x])
-                
-                # Calculate distances from central node
                 distances = nx.single_source_shortest_path_length(self.graph.to_undirected(), central_node)
                 max_distance = max(distances.values()) if distances else 1
-                
-                colors = []
-                for node in self.graph.nodes():
-                    distance = distances.get(node, max_distance)
-                    depth_ratio = distance / max_distance
-                    colors.append(plt.cm.plasma(1 - depth_ratio))  # Invert so central is bright
-                return colors
+                return [1 - (distances.get(node, max_distance) / max_distance) for node in self.graph.nodes()]
             except:
-                return ['lightblue'] * self.graph.number_of_nodes()
+                return [0.5] * self.graph.number_of_nodes()
         
         else:
-            return ['lightblue'] * self.graph.number_of_nodes()
+            return [0.5] * self.graph.number_of_nodes()
     
     def _get_node_sizes(self, size_metric: str) -> List[float]:
         """
-        Get node sizes based on metric.
+        Get node sizes for Plotly visualization.
         
         Args:
             size_metric: Sizing metric name
@@ -465,7 +316,8 @@ class GraphVisualizer:
         Returns:
             List of sizes for nodes
         """
-        base_size = 300
+        base_size = 20
+        max_size = 50
         
         if size_metric == 'constant':
             return [base_size] * self.graph.number_of_nodes()
@@ -473,79 +325,18 @@ class GraphVisualizer:
         elif size_metric == 'degree':
             degrees = dict(self.graph.degree())
             max_degree = max(degrees.values()) if degrees else 1
-            
-            sizes = []
-            for node in self.graph.nodes():
-                degree_ratio = degrees[node] / max_degree
-                size = base_size + (degree_ratio * base_size * 2)
-                sizes.append(size)
-            return sizes
+            return [base_size + (degrees[node] / max_degree) * (max_size - base_size) for node in self.graph.nodes()]
         
         elif size_metric == 'pagerank':
             try:
                 pagerank = nx.pagerank(self.graph)
                 max_pr = max(pagerank.values()) if pagerank else 1
-                
-                sizes = []
-                for node in self.graph.nodes():
-                    pr_ratio = pagerank[node] / max_pr
-                    size = base_size + (pr_ratio * base_size * 2)
-                    sizes.append(size)
-                return sizes
+                return [base_size + (pagerank[node] / max_pr) * (max_size - base_size) for node in self.graph.nodes()]
             except:
                 return [base_size] * self.graph.number_of_nodes()
         
         else:
             return [base_size] * self.graph.number_of_nodes()
-    
-    def _get_edge_widths(self) -> List[float]:
-        """
-        Get edge widths based on weights.
-        
-        Returns:
-            List of widths for edges
-        """
-        edges = self.graph.edges(data=True)
-        weights = [edge[2].get('weight', 1) for edge in edges]
-        
-        if not weights:
-            return [1.0]
-        
-        max_weight = max(weights)
-        min_width = 0.5
-        max_width = 4.0
-        
-        widths = []
-        for weight in weights:
-            normalized_weight = weight / max_weight
-            width = min_width + (normalized_weight * (max_width - min_width))
-            widths.append(width)
-        
-        return widths
-    
-    def _get_edge_colors(self) -> List[str]:
-        """
-        Get edge colors based on weights.
-        
-        Returns:
-            List of colors for edges
-        """
-        edges = self.graph.edges(data=True)
-        weights = [edge[2].get('weight', 1) for edge in edges]
-        
-        if not weights:
-            return ['gray']
-        
-        max_weight = max(weights)
-        colors = []
-        
-        for weight in weights:
-            intensity = weight / max_weight
-            # Use grayscale: lighter for lower weights, darker for higher weights
-            gray_value = 0.8 - (intensity * 0.6)  # Range from 0.8 to 0.2
-            colors.append(str(gray_value))
-        
-        return colors
     
     def _abbreviate_url(self, url: str, max_length: int = 25) -> str:
         """
@@ -608,116 +399,6 @@ class GraphVisualizer:
             # Fallback to simple truncation
             return url[:max_length-3] + '...' if len(url) > max_length else url
     
-    def _get_plotly_node_colors(self, color_scheme: str) -> List[float]:
-        """
-        Get node colors for Plotly visualization.
-        
-        Args:
-            color_scheme: Color scheme name
-            
-        Returns:
-            List of color values for nodes
-        """
-        if color_scheme == 'default':
-            return [0.5] * self.graph.number_of_nodes()
-        
-        elif color_scheme == 'degree':
-            degrees = dict(self.graph.degree())
-            max_degree = max(degrees.values()) if degrees else 1
-            return [degrees[node] / max_degree for node in self.graph.nodes()]
-        
-        elif color_scheme == 'pagerank':
-            try:
-                pagerank = nx.pagerank(self.graph)
-                max_pr = max(pagerank.values()) if pagerank else 1
-                return [pagerank[node] / max_pr for node in self.graph.nodes()]
-            except:
-                return [0.5] * self.graph.number_of_nodes()
-        
-        elif color_scheme == 'depth':
-            try:
-                centrality = nx.betweenness_centrality(self.graph)
-                central_node = max(centrality.keys(), key=lambda x: centrality[x])
-                distances = nx.single_source_shortest_path_length(self.graph.to_undirected(), central_node)
-                max_distance = max(distances.values()) if distances else 1
-                return [1 - (distances.get(node, max_distance) / max_distance) for node in self.graph.nodes()]
-            except:
-                return [0.5] * self.graph.number_of_nodes()
-        
-        else:
-            return [0.5] * self.graph.number_of_nodes()
-    
-    def _get_plotly_node_sizes(self, size_metric: str) -> List[float]:
-        """
-        Get node sizes for Plotly visualization.
-        
-        Args:
-            size_metric: Sizing metric name
-            
-        Returns:
-            List of sizes for nodes
-        """
-        base_size = 20
-        max_size = 50
-        
-        if size_metric == 'constant':
-            return [base_size] * self.graph.number_of_nodes()
-        
-        elif size_metric == 'degree':
-            degrees = dict(self.graph.degree())
-            max_degree = max(degrees.values()) if degrees else 1
-            return [base_size + (degrees[node] / max_degree) * (max_size - base_size) for node in self.graph.nodes()]
-        
-        elif size_metric == 'pagerank':
-            try:
-                pagerank = nx.pagerank(self.graph)
-                max_pr = max(pagerank.values()) if pagerank else 1
-                return [base_size + (pagerank[node] / max_pr) * (max_size - base_size) for node in self.graph.nodes()]
-            except:
-                return [base_size] * self.graph.number_of_nodes()
-        
-        else:
-            return [base_size] * self.graph.number_of_nodes()
-    
-    def _generate_static_labels(self) -> Dict[str, str]:
-        """
-        Generate node labels for static visualization (original implementation).
-        
-        Returns:
-            Dictionary mapping nodes to display labels
-        """
-        labels = {}
-        for node in self.graph.nodes():
-            # Extract meaningful part of URL for display
-            if '/' in node:
-                parts = node.split('/')
-                if len(parts) > 3:
-                    # Take the last non-empty part, or the domain if path is empty
-                    label = parts[-1] if parts[-1] else parts[-2]
-                else:
-                    label = parts[-1] if parts[-1] else node
-            else:
-                label = node
-            
-            # Limit label length
-            if len(label) > 15:
-                label = label[:12] + '...'
-            
-            labels[node] = label
-        
-        return labels
-    
-    def _add_colorbar(self, color_scheme: str) -> None:
-        """
-        Add a colorbar legend to the plot.
-        
-        Args:
-            color_scheme: Color scheme used
-        """
-        # This is a simplified colorbar - in a real implementation,
-        # you would create a proper colorbar with the actual values
-        pass
-    
     def create_subgraph_visualization(self, nodes: List[str], output_path: str, 
                                     **kwargs) -> None:
         """
@@ -737,8 +418,10 @@ class GraphVisualizer:
         # Create new visualizer for subgraph
         sub_visualizer = GraphVisualizer(
             subgraph, 
-            title=f"Subgraph ({subgraph.number_of_nodes()} nodes, {subgraph.number_of_edges()} edges)"
+            self.base_url,
+            self.metadata
         )
+        sub_visualizer.title = f"Subgraph for {self.base_url} ({subgraph.number_of_nodes()} nodes, {subgraph.number_of_edges()} edges)"
         
         # Create visualization
         sub_visualizer.create_visualization(output_path, **kwargs)
@@ -771,7 +454,7 @@ class GraphVisualizer:
         
         for i, component in enumerate(components):
             if len(component) > 1:  # Skip single-node components
-                output_path = output_dir / f"component_{i+1}.svg"
+                output_path = output_dir / f"component_{i+1}.html"
                 self.create_subgraph_visualization(
                     list(component), 
                     str(output_path), 

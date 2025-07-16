@@ -142,3 +142,12 @@ class URLFilter:
             Number of skip patterns
         """
         return len(self.skip_patterns)
+    
+    def get_patterns_html(self) -> str:
+        """
+        Returns a string representation of all loaded skip patterns.
+        """
+        if not self.skip_patterns:
+            return "None"
+
+        return "<br>".join(pattern.pattern for pattern in self.skip_patterns)

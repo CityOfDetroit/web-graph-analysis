@@ -2,7 +2,7 @@
 """
 Web Page Link Graph Generator - Main Entry Point
 
-A script that generates directed graphs of web pages and their links.
+A script that generates interactive HTML graphs of web pages and their links.
 Supports web scraping or loading from pre-existing data files.
 """
 
@@ -112,30 +112,21 @@ def create_argument_parser() -> argparse.ArgumentParser:
         Configured ArgumentParser instance
     """
     parser = argparse.ArgumentParser(
-        description='Generate directed graphs of web pages and links',
+        description='Generate interactive HTML graphs of web pages and links',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Scrape a website and save data + generate interactive graph
   python -m web_graph_generator --base-url https://example.com --scrape --max-depth 3 --output-data graph_data.json --data-format json --output-image graph.html
 
-  # Load existing data and generate static graph
-  python -m web_graph_generator --base-url https://example.com --data-file graph_data.json --output-image graph.svg
-
-  # Scrape with URL filtering and CSS selector filtering (interactive)
-  python -m web_graph_generator --base-url https://example.com --scrape --skip-patterns skip_urls.txt --skip-selectors skip_elements.txt --output-image graph.html --verbose
-
-  # Scrape with no cycles (static)
-  python -m web_graph_generator --base-url https://example.com --scrape --no-cycles --output-image graph.svg --verbose
-
-  # Load existing data and generate graph
-  python -m web_graph_generator --base-url https://example.com --data-file graph_data.json --output-image my_graph.svg
+  # Load existing data and generate interactive graph
+  python -m web_graph_generator --base-url https://example.com --data-file graph_data.json --output-image graph.html
 
   # Scrape with URL filtering and CSS selector filtering
-  python -m web_graph_generator --base-url https://example.com --scrape --skip-patterns skip_urls.txt --skip-selectors skip_elements.txt --verbose
+  python -m web_graph_generator --base-url https://example.com --scrape --skip-patterns skip_urls.txt --skip-selectors skip_elements.txt --output-image graph.html --verbose
 
   # Scrape with no cycles
-  python -m web_graph_generator --base-url https://example.com --scrape --no-cycles --verbose
+  python -m web_graph_generator --base-url https://example.com --scrape --no-cycles --output-image graph.html --verbose
         """
     )
     
@@ -211,8 +202,8 @@ Examples:
     
     parser.add_argument(
         '--output-image',
-        default='graph.svg',
-        help='Output path for graph image (.svg for static, .html for interactive) (default: graph.svg)'
+        default='graph.html',
+        help='Output path for interactive HTML graph (default: graph.html)'
     )
     
     # Visualization options
@@ -267,15 +258,15 @@ Examples:
     return parser
 
 
-def scrape_website(args: argparse.Namespace) -> dict:
+def scrape_website(args: argparse.Namespace) -> tuple[dict, dict]:
     """
-    Scrape website and return graph data.
+    Scrape website and return graph data and metadata.
     
     Args:
         args: Command line arguments
         
     Returns:
-        Dictionary with graph data
+        Tuple of (graph_data, metadata)
     """
     logging.info("Starting web scraping mode")
     
@@ -307,18 +298,26 @@ def scrape_website(args: argparse.Namespace) -> dict:
         stats = scraper.get_statistics()
         logging.info(f"Scraping statistics: {stats}")
         
+        # Collect metadata for visualization
+        metadata = {
+            'max_depth': args.max_depth,
+            'url_patterns': url_filter.get_patterns_html() if url_filter else 'None',
+            'css_selectors': css_filter.get_selectors_html() if css_filter else 'None',
+            'allow_cycles': allow_cycles
+        }
+        
         # Save data if requested
         if args.output_data:
             DataSerializer.save_graph_data(graph_data, args.output_data, args.data_format)
         
-        return graph_data
+        return graph_data, metadata
         
     finally:
         # Clean up scraper resources
         scraper.close()
 
 
-def load_existing_data(args: argparse.Namespace) -> dict:
+def load_existing_data(args: argparse.Namespace) -> tuple[dict, dict]:
     """
     Load existing graph data from file.
     
@@ -326,7 +325,7 @@ def load_existing_data(args: argparse.Namespace) -> dict:
         args: Command line arguments
         
     Returns:
-        Dictionary with graph data
+        Tuple of (graph_data, metadata)
     """
     logging.info("Loading data from file")
     
@@ -338,7 +337,25 @@ def load_existing_data(args: argparse.Namespace) -> dict:
     graph_data = DataSerializer.load_graph_data(args.data_file)
     
     logging.info(f"Loaded {len(graph_data)} pages from {args.data_file}")
-    return graph_data
+
+    # Initialize URL filter
+    url_filter = URLFilter(args.skip_patterns)
+    
+    # Initialize CSS filter
+    css_filter = CSSFilter(args.skip_selectors) if args.skip_selectors else None
+    
+    # Handle cycle settings
+    allow_cycles = args.allow_cycles and not args.no_cycles
+    
+    # Collect metadata for visualization
+    metadata = {
+        'max_depth': args.max_depth,
+        'url_patterns': url_filter.get_patterns_html() if url_filter else 'None',
+        'css_selectors': css_filter.get_selectors_html() if css_filter else 'None',
+        'allow_cycles': allow_cycles
+    }
+    
+    return graph_data, metadata
 
 
 def create_graph(graph_data: dict, args: argparse.Namespace) -> 'nx.DiGraph':
@@ -374,18 +391,19 @@ def create_graph(graph_data: dict, args: argparse.Namespace) -> 'nx.DiGraph':
     return graph
 
 
-def create_visualization(graph: 'nx.DiGraph', args: argparse.Namespace) -> None:
+def create_visualization(graph: 'nx.DiGraph', args: argparse.Namespace, metadata: dict) -> None:
     """
     Create and save graph visualization.
     
     Args:
         graph: NetworkX DiGraph
         args: Command line arguments
+        metadata: Metadata about scraping parameters
     """
     logging.info("Creating visualization")
     
-    # Create visualizer
-    visualizer = GraphVisualizer(graph)
+    # Create visualizer with metadata
+    visualizer = GraphVisualizer(graph, args.base_url, metadata)
     
     # Get visualization recommendations
     viz_stats = visualizer.get_visualization_stats()
@@ -421,17 +439,17 @@ def main():
     validate_arguments(args)
     
     try:
-        # Get graph data
+        # Get graph data and metadata
         if args.scrape:
-            graph_data = scrape_website(args)
+            graph_data, metadata = scrape_website(args)
         else:
-            graph_data = load_existing_data(args)
+            graph_data, metadata = load_existing_data(args)
         
         # Create graph
         graph = create_graph(graph_data, args)
         
         # Create visualization
-        create_visualization(graph, args)
+        create_visualization(graph, args, metadata)
         
         logging.info("Processing complete!")
         

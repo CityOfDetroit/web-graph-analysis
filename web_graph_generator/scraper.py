@@ -135,6 +135,14 @@ class CSSFilter:
         """
         return len(self.skip_selectors)
 
+    def get_selectors_html(self) -> str:
+        """
+        Return a string representation of all loaded CSS selectors.
+        """
+        if not self.skip_selectors:
+            return "None"
+
+        return "<br>".join(self.skip_selectors)
 
 class WebScraper:
     """Handles web scraping and link extraction."""
