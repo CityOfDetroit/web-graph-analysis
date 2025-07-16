@@ -24,7 +24,7 @@ class DrupalTaxonomyExtractor:
     """Extracts taxonomy hierarchies from Drupal MySQL database."""
     
     def __init__(self, db_config: Dict[str, str], base_term_id: int, 
-                 max_depth: int = 5, base_url: str = None):
+                 max_depth: int = 5, base_url: str = ''):
         """
         Initialize Drupal taxonomy extractor.
         
@@ -40,12 +40,13 @@ class DrupalTaxonomyExtractor:
         self.db_config = db_config
         self.base_term_id = base_term_id
         self.max_depth = max_depth
-        # Convert base URL to just domain and protocol
+        # Convert base URL to just domain and protocol, ensure it's set
         if base_url:
-          parsed = urlparse(base_url)
-          self.base_url = f"{parsed.scheme}://{parsed.netloc}"
+            parsed = urlparse(base_url)
+            self.base_url = f"{parsed.scheme}://{parsed.netloc}"
         else:
-          self.base_url = ''
+            # Default to empty string - will be handled in _get_term_url
+            self.base_url = 'https://detroitmi.gov'
         self.connection = None
         
         # Statistics
@@ -204,13 +205,15 @@ class DrupalTaxonomyExtractor:
                 # Found English alias
                 alias = alias_result[0].lstrip('/')
                 self.aliases_found += 1
-                url = f"{self.base_url}/{alias}" if self.base_url else f"/{alias}"
+                # Always include base_url
+                url = f"{self.base_url}/{alias}"
                 logging.debug(f"Found English alias for term {term_id} ({term_name}): {url}")
                 return url
             else:
                 # No English alias, use default taxonomy URL
                 self.default_urls_used += 1
-                url = f"{self.base_url}/taxonomy/term/{term_id}" if self.base_url else f"/taxonomy/term/{term_id}"
+                # Always include base_url
+                url = f"{self.base_url}/taxonomy/term/{term_id}"
                 logging.debug(f"Using default URL for term {term_id} ({term_name}): {url}")
                 return url
                 
