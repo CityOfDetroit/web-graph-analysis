@@ -178,6 +178,7 @@ class WebScraper:
         self.failed_requests = 0
         self.total_links_found = 0
         self.links_skipped_by_css = 0
+        self.self_links_filtered = 0
     
     def extract_links(self, html_content: str, current_url: str) -> List[str]:
         """
@@ -210,6 +211,13 @@ class WebScraper:
                 # Resolve relative URLs
                 absolute_url = urljoin(current_url, href)
                 normalized_url = URLNormalizer.normalize_url(absolute_url)
+                
+                # Skip self-links (links to the same page after normalization)
+                normalized_current_url = URLNormalizer.normalize_url(current_url)
+                if normalized_url == normalized_current_url:
+                    self.self_links_filtered += 1
+                    logging.debug(f"Filtering self-link: {href} -> {normalized_url}")
+                    continue
                 
                 # Filter URLs
                 if (URLNormalizer.is_valid_url(normalized_url, self.base_domain) and
@@ -335,6 +343,7 @@ class WebScraper:
         logging.info(f"  Failed requests: {self.failed_requests}")
         logging.info(f"  Total links found: {self.total_links_found}")
         logging.info(f"  Links skipped by CSS selectors: {self.links_skipped_by_css}")
+        logging.info(f"  Self-links filtered: {self.self_links_filtered}")
         logging.info(f"  Unique pages in graph: {len(graph_data)}")
     
     def get_statistics(self) -> Dict[str, int]:
@@ -348,7 +357,8 @@ class WebScraper:
             'pages_scraped': self.pages_scraped,
             'failed_requests': self.failed_requests,
             'total_links_found': self.total_links_found,
-            'links_skipped_by_css': self.links_skipped_by_css
+            'links_skipped_by_css': self.links_skipped_by_css,
+            'self_links_filtered': self.self_links_filtered
         }
     
     def close(self) -> None:
