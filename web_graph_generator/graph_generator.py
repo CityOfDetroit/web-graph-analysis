@@ -40,8 +40,13 @@ class GraphGenerator:
         """
         G = nx.DiGraph()
         
+        # Collect all unique URLs (both scraped pages and link targets)
+        all_urls = set(graph_data.keys())
+        for links in graph_data.values():
+            all_urls.update(links)
+        
         # Add all nodes first
-        for url in graph_data.keys():
+        for url in all_urls:
             G.add_node(url)
             self.graph_stats['nodes_added'] += 1
         
@@ -54,20 +59,19 @@ class GraphGenerator:
             
             # Add edges with weights
             for target_url, weight in target_counts.items():
-                if target_url in graph_data:  # Only add edges to known nodes
-                    if not self.allow_cycles:
-                        # Check if adding this edge would create a cycle
+                # Add edge to any valid target (both internal and external)
+                if not self.allow_cycles:
+                    # Check if adding this edge would create a cycle
+                    # Only check for cycles if both nodes are in the graph
+                    if target_url in G and source_url in G:
                         if nx.has_path(G, target_url, source_url):
                             self.graph_stats['cycles_detected'] += 1
                             self.graph_stats['edges_skipped'] += 1
                             logging.debug(f"Skipping edge {source_url} -> {target_url} (would create cycle)")
                             continue
-                    
-                    G.add_edge(source_url, target_url, weight=weight)
-                    self.graph_stats['edges_added'] += 1
-                else:
-                    # Target URL not in our scraped data
-                    self.graph_stats['edges_skipped'] += 1
+                
+                G.add_edge(source_url, target_url, weight=weight)
+                self.graph_stats['edges_added'] += 1
         
         self._log_graph_statistics(G)
         return G

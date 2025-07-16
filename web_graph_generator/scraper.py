@@ -179,6 +179,7 @@ class WebScraper:
         self.total_links_found = 0
         self.links_skipped_by_css = 0
         self.self_links_filtered = 0
+        self.external_links_found = 0
     
     def extract_links(self, html_content: str, current_url: str) -> List[str]:
         """
@@ -219,10 +220,24 @@ class WebScraper:
                     logging.debug(f"Filtering self-link: {href} -> {normalized_url}")
                     continue
                 
-                # Filter URLs
-                if (URLNormalizer.is_valid_url(normalized_url, self.base_domain) and
-                    not self.url_filter.should_skip(normalized_url)):
+                # Check if URL is valid
+                if not URLNormalizer.is_valid_url(normalized_url):
+                    logging.debug(f"Invalid URL skipped: {normalized_url}")
+                    continue
+                
+                # Check if it's an external link (different domain)
+                link_domain = urlparse(normalized_url).netloc
+                is_external = link_domain != self.base_domain
+                
+                if is_external:
+                    self.external_links_found += 1
+                    logging.debug(f"Found external link: {normalized_url}")
+                
+                # Apply URL filtering (works on full URL including domain)
+                if not self.url_filter.should_skip(normalized_url):
                     links.append(normalized_url)
+                else:
+                    logging.debug(f"URL filtered by regex: {normalized_url}")
             
             # Remove duplicates while preserving order
             unique_links = []
@@ -281,6 +296,7 @@ class WebScraper:
     def scrape(self) -> Dict[str, List[str]]:
         """
         Scrape web pages and extract links using BFS.
+        Only scrapes internal pages but captures all links (internal + external).
         
         Returns:
             Dictionary mapping URLs to lists of linked URLs
@@ -297,11 +313,21 @@ class WebScraper:
             if depth > self.max_depth:
                 continue
                 
+            # Skip if we've already visited this URL
             if not self.allow_cycles and current_url in visited:
                 continue
                 
             if current_url in visited:
                 # For cycles allowed, still track the link but don't re-scrape
+                if current_url not in graph_data:
+                    graph_data[current_url] = []
+                continue
+            
+            # Only scrape internal URLs (same domain as base_url)
+            current_domain = urlparse(current_url).netloc
+            if current_domain != self.base_domain:
+                logging.debug(f"Skipping external URL for scraping: {current_url}")
+                # Still add to graph_data as a node, but with empty links
                 if current_url not in graph_data:
                     graph_data[current_url] = []
                 continue
@@ -317,7 +343,7 @@ class WebScraper:
                 graph_data[current_url] = []
                 continue
             
-            # Extract links
+            # Extract links (both internal and external)
             links = self.extract_links(html_content, current_url)
             graph_data[current_url] = links
             
@@ -326,7 +352,11 @@ class WebScraper:
             # Add new links to queue for next depth level
             if depth < self.max_depth:
                 for link in links:
-                    if self.allow_cycles or link not in visited:
+                    # Only queue internal links for further crawling
+                    link_domain = urlparse(link).netloc
+                    is_internal = link_domain == self.base_domain
+                    
+                    if is_internal and (self.allow_cycles or link not in visited):
                         queue.append((link, depth + 1))
             
             # Be respectful with delays
@@ -344,6 +374,7 @@ class WebScraper:
         logging.info(f"  Total links found: {self.total_links_found}")
         logging.info(f"  Links skipped by CSS selectors: {self.links_skipped_by_css}")
         logging.info(f"  Self-links filtered: {self.self_links_filtered}")
+        logging.info(f"  External links found: {self.external_links_found}")
         logging.info(f"  Unique pages in graph: {len(graph_data)}")
     
     def get_statistics(self) -> Dict[str, int]:
@@ -358,7 +389,8 @@ class WebScraper:
             'failed_requests': self.failed_requests,
             'total_links_found': self.total_links_found,
             'links_skipped_by_css': self.links_skipped_by_css,
-            'self_links_filtered': self.self_links_filtered
+            'self_links_filtered': self.self_links_filtered,
+            'external_links_found': self.external_links_found
         }
     
     def close(self) -> None:

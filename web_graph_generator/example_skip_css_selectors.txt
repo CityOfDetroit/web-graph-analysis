@@ -1,2 +1,7 @@
-.side-bar
-nav.breadcrumb-nav
+footer.footer
+#block-detroitminew-breadcrumbs
+header#header-mobile
+header#header
+#site-menu-drawer--desktop
+#site-menu-drawer--mobile
+#banner

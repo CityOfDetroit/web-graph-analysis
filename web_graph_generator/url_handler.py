@@ -38,24 +38,31 @@ class URLNormalizer:
         return normalized
     
     @staticmethod
-    def is_valid_url(url: str, base_domain: str) -> bool:
+    def is_valid_url(url: str, base_domain: str = None) -> bool:
         """
-        Check if URL is valid and belongs to the base domain.
+        Check if URL is valid. Optionally restrict to base domain.
         
         Args:
             url: URL to validate
-            base_domain: Base domain to restrict crawling to
+            base_domain: Base domain to restrict crawling to (optional)
             
         Returns:
-            True if URL is valid and within domain
+            True if URL is valid (and within domain if base_domain specified)
         """
         try:
             parsed = urlparse(url)
-            return (
-                parsed.scheme in ('http', 'https') and
-                parsed.netloc == base_domain and
-                parsed.path  # Must have a path
-            )
+            
+            # Must have scheme and netloc
+            if not parsed.scheme in ('http', 'https') or not parsed.netloc:
+                return False
+            
+            # If base_domain is specified, restrict to that domain
+            if base_domain is not None:
+                return parsed.netloc == base_domain and parsed.path
+            
+            # Otherwise, any valid HTTP/HTTPS URL is acceptable
+            return True
+            
         except Exception:
             return False
 
