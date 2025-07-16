@@ -116,8 +116,17 @@ def create_argument_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Scrape a website and save data + generate graph
-  python -m web_graph_generator --base-url https://example.com --scrape --max-depth 3 --output-data graph_data.json --data-format json
+  # Scrape a website and save data + generate interactive graph
+  python -m web_graph_generator --base-url https://example.com --scrape --max-depth 3 --output-data graph_data.json --data-format json --output-image graph.html
+
+  # Load existing data and generate static graph
+  python -m web_graph_generator --base-url https://example.com --data-file graph_data.json --output-image graph.svg
+
+  # Scrape with URL filtering and CSS selector filtering (interactive)
+  python -m web_graph_generator --base-url https://example.com --scrape --skip-patterns skip_urls.txt --skip-selectors skip_elements.txt --output-image graph.html --verbose
+
+  # Scrape with no cycles (static)
+  python -m web_graph_generator --base-url https://example.com --scrape --no-cycles --output-image graph.svg --verbose
 
   # Load existing data and generate graph
   python -m web_graph_generator --base-url https://example.com --data-file graph_data.json --output-image my_graph.svg
@@ -203,7 +212,7 @@ Examples:
     parser.add_argument(
         '--output-image',
         default='graph.svg',
-        help='Output path for graph image (default: graph.svg)'
+        help='Output path for graph image (.svg for static, .html for interactive) (default: graph.svg)'
     )
     
     # Visualization options
