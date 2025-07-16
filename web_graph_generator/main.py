@@ -14,14 +14,14 @@ from pathlib import Path
 try:
     # Try relative imports first (when run as module)
     from .url_handler import URLFilter
-    from .scraper import WebScraper
+    from .scraper import WebScraper, CSSFilter
     from .graph_generator import GraphGenerator
     from .data_serializer import DataSerializer
     from .visualizer import GraphVisualizer
 except ImportError:
     # Fallback to absolute imports (when run directly)
     from web_graph_generator.url_handler import URLFilter
-    from web_graph_generator.scraper import WebScraper
+    from web_graph_generator.scraper import WebScraper, CSSFilter
     from web_graph_generator.graph_generator import GraphGenerator
     from web_graph_generator.data_serializer import DataSerializer
     from web_graph_generator.visualizer import GraphVisualizer
@@ -76,6 +76,10 @@ def validate_arguments(args: argparse.Namespace) -> None:
         logging.error(f"Skip patterns file not found: {args.skip_patterns}")
         sys.exit(1)
     
+    if args.skip_selectors and not Path(args.skip_selectors).exists():
+        logging.error(f"CSS selectors file not found: {args.skip_selectors}")
+        sys.exit(1)
+    
     if args.data_file and not Path(args.data_file).exists():
         logging.error(f"Data file not found: {args.data_file}")
         sys.exit(1)
@@ -118,8 +122,11 @@ Examples:
   # Load existing data and generate graph
   python -m web_graph_generator --base-url https://example.com --data-file graph_data.json --output-image my_graph.svg
 
-  # Scrape with URL filtering and no cycles
-  python -m web_graph_generator --base-url https://example.com --scrape --skip-patterns skip_urls.txt --no-cycles --verbose
+  # Scrape with URL filtering and CSS selector filtering
+  python -m web_graph_generator --base-url https://example.com --scrape --skip-patterns skip_urls.txt --skip-selectors skip_elements.txt --verbose
+
+  # Scrape with no cycles
+  python -m web_graph_generator --base-url https://example.com --scrape --no-cycles --verbose
         """
     )
     
@@ -147,6 +154,11 @@ Examples:
     parser.add_argument(
         '--skip-patterns',
         help='File containing regex patterns of URLs to skip'
+    )
+    
+    parser.add_argument(
+        '--skip-selectors',
+        help='File containing CSS selectors for HTML elements to skip when extracting links'
     )
     
     # Scraping options
@@ -261,6 +273,9 @@ def scrape_website(args: argparse.Namespace) -> dict:
     # Initialize URL filter
     url_filter = URLFilter(args.skip_patterns)
     
+    # Initialize CSS filter
+    css_filter = CSSFilter(args.skip_selectors) if args.skip_selectors else None
+    
     # Handle cycle settings
     allow_cycles = args.allow_cycles and not args.no_cycles
     
@@ -269,6 +284,7 @@ def scrape_website(args: argparse.Namespace) -> dict:
         base_url=args.base_url,
         max_depth=args.max_depth,
         url_filter=url_filter,
+        css_filter=css_filter,
         allow_cycles=allow_cycles,
         delay=args.delay,
         timeout=args.timeout

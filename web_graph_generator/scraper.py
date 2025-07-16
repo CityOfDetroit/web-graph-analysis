@@ -6,6 +6,7 @@ and link extraction from HTML pages.
 """
 
 import logging
+import sys
 import time
 from collections import deque
 from typing import Dict, List, Optional, Set
@@ -17,10 +18,129 @@ from bs4 import BeautifulSoup
 from .url_handler import URLNormalizer, URLFilter
 
 
+class CSSFilter:
+    """Handles CSS selector-based filtering for HTML elements."""
+    
+    def __init__(self, skip_selectors_file: Optional[str] = None):
+        """
+        Initialize CSS filter with optional skip selectors file.
+        
+        Args:
+            skip_selectors_file: Path to file containing CSS selectors to skip
+        """
+        self.skip_selectors: List[str] = []
+        if skip_selectors_file:
+            self.load_skip_selectors(skip_selectors_file)
+    
+    def load_skip_selectors(self, selectors_file: str) -> None:
+        """
+        Load CSS selectors from file.
+        
+        Args:
+            selectors_file: Path to file containing CSS selectors
+            
+        Raises:
+            SystemExit: If file not found
+        """
+        try:
+            with open(selectors_file, 'r') as f:
+                for line_num, line in enumerate(f, 1):
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        # Basic validation of CSS selector
+                        if self._is_valid_selector(line):
+                            self.skip_selectors.append(line)
+                        else:
+                            logging.warning(f"Invalid CSS selector at line {line_num}: {line}")
+            logging.info(f"Loaded {len(self.skip_selectors)} CSS skip selectors")
+        except FileNotFoundError:
+            logging.error(f"CSS selectors file not found: {selectors_file}")
+            sys.exit(1)
+    
+    def _is_valid_selector(self, selector: str) -> bool:
+        """
+        Basic validation of CSS selector syntax.
+        
+        Args:
+            selector: CSS selector string
+            
+        Returns:
+            True if selector appears valid
+        """
+        # Basic checks - not exhaustive but catches common errors
+        if not selector:
+            return False
+        
+        # Check for balanced brackets
+        if selector.count('[') != selector.count(']'):
+            return False
+        
+        if selector.count('(') != selector.count(')'):
+            return False
+        
+        # Check for invalid characters at start
+        if selector.startswith((',', '>', '+', '~')):
+            return False
+            
+        return True
+    
+    def should_skip_element(self, element, soup) -> bool:
+        """
+        Check if element should be skipped based on CSS selectors.
+        
+        Args:
+            element: BeautifulSoup element to check
+            soup: BeautifulSoup object for CSS selection
+            
+        Returns:
+            True if element should be skipped
+        """
+        for selector in self.skip_selectors:
+            try:
+                # Check if the element is within any element matching the selector
+                matching_elements = soup.select(selector)
+                for matching_element in matching_elements:
+                    if self._is_element_within(element, matching_element):
+                        return True
+            except Exception as e:
+                logging.warning(f"Error applying CSS selector '{selector}': {e}")
+                continue
+        
+        return False
+    
+    def _is_element_within(self, element, parent) -> bool:
+        """
+        Check if element is within parent element.
+        
+        Args:
+            element: Element to check
+            parent: Potential parent element
+            
+        Returns:
+            True if element is within parent
+        """
+        current = element
+        while current:
+            if current == parent:
+                return True
+            current = current.parent
+        return False
+    
+    def get_selectors_count(self) -> int:
+        """
+        Get the number of loaded CSS selectors.
+        
+        Returns:
+            Number of CSS selectors
+        """
+        return len(self.skip_selectors)
+
+
 class WebScraper:
     """Handles web scraping and link extraction."""
     
     def __init__(self, base_url: str, max_depth: int, url_filter: URLFilter, 
+                 css_filter: Optional['CSSFilter'] = None,
                  allow_cycles: bool = True, delay: float = 1.0, timeout: int = 10):
         """
         Initialize web scraper.
@@ -29,6 +149,7 @@ class WebScraper:
             base_url: Starting URL for crawling
             max_depth: Maximum depth to crawl
             url_filter: URL filter instance
+            css_filter: CSS filter instance for skipping elements
             allow_cycles: Whether to allow cycles in the graph
             delay: Delay between requests in seconds
             timeout: Request timeout in seconds
@@ -36,6 +157,7 @@ class WebScraper:
         self.base_url = URLNormalizer.normalize_url(base_url)
         self.max_depth = max_depth
         self.url_filter = url_filter
+        self.css_filter = css_filter
         self.allow_cycles = allow_cycles
         self.delay = delay
         self.timeout = timeout
@@ -55,6 +177,7 @@ class WebScraper:
         self.pages_scraped = 0
         self.failed_requests = 0
         self.total_links_found = 0
+        self.links_skipped_by_css = 0
     
     def extract_links(self, html_content: str, current_url: str) -> List[str]:
         """
@@ -76,6 +199,12 @@ class WebScraper:
                 href = link['href']
                 # Skip empty hrefs and javascript/mailto links
                 if not href or href.startswith(('javascript:', 'mailto:', 'tel:')):
+                    continue
+                
+                # Skip links based on CSS selectors
+                if self.css_filter and self.css_filter.should_skip_element(link, soup):
+                    self.links_skipped_by_css += 1
+                    logging.debug(f"Skipping link due to CSS selector: {href}")
                     continue
                 
                 # Resolve relative URLs
@@ -205,6 +334,7 @@ class WebScraper:
         logging.info(f"  Pages scraped: {self.pages_scraped}")
         logging.info(f"  Failed requests: {self.failed_requests}")
         logging.info(f"  Total links found: {self.total_links_found}")
+        logging.info(f"  Links skipped by CSS selectors: {self.links_skipped_by_css}")
         logging.info(f"  Unique pages in graph: {len(graph_data)}")
     
     def get_statistics(self) -> Dict[str, int]:
@@ -217,7 +347,8 @@ class WebScraper:
         return {
             'pages_scraped': self.pages_scraped,
             'failed_requests': self.failed_requests,
-            'total_links_found': self.total_links_found
+            'total_links_found': self.total_links_found,
+            'links_skipped_by_css': self.links_skipped_by_css
         }
     
     def close(self) -> None:

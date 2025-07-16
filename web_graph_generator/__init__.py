@@ -6,7 +6,7 @@ Supports web scraping and visualization of link structures.
 """
 
 from .graph_generator import GraphGenerator
-from .scraper import WebScraper
+from .scraper import WebScraper, CSSFilter
 from .url_handler import URLNormalizer, URLFilter
 from .data_serializer import DataSerializer
 from .visualizer import GraphVisualizer
@@ -18,6 +18,7 @@ __description__ = "Generate directed graphs of web pages and links"
 __all__ = [
     'GraphGenerator',
     'WebScraper', 
+    'CSSFilter',
     'URLNormalizer',
     'URLFilter',
     'DataSerializer',
