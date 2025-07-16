@@ -2,8 +2,8 @@
 """
 Web Page Link Graph Generator - Main Entry Point
 
-A script that generates interactive HTML graphs of web pages and their links.
-Supports web scraping or loading from pre-existing data files.
+A script that generates interactive HTML graphs of web pages and their links
+or Drupal taxonomy hierarchies. Supports web scraping or loading from pre-existing data files.
 """
 
 import argparse
@@ -18,6 +18,7 @@ try:
     from .graph_generator import GraphGenerator
     from .data_serializer import DataSerializer
     from .visualizer import GraphVisualizer
+    from .drupal_taxonomy import DrupalTaxonomyExtractor, test_connection
 except ImportError:
     # Fallback to absolute imports (when run directly)
     from web_graph_generator.url_handler import URLFilter
@@ -25,6 +26,7 @@ except ImportError:
     from web_graph_generator.graph_generator import GraphGenerator
     from web_graph_generator.data_serializer import DataSerializer
     from web_graph_generator.visualizer import GraphVisualizer
+    from web_graph_generator.drupal_taxonomy import DrupalTaxonomyExtractor, test_connection
 
 
 def setup_logging(verbose: bool) -> None:
@@ -52,19 +54,33 @@ def validate_arguments(args: argparse.Namespace) -> None:
     Raises:
         SystemExit: If arguments are invalid
     """
-    # Check mutually exclusive scraping options
-    if not args.scrape and not args.data_file:
-        logging.error("Either --scrape must be enabled or --data-file must be provided")
-        sys.exit(1)
-    
-    if args.scrape and args.data_file:
-        logging.warning("Both --scrape and --data-file provided. Using scraping mode.")
-    
-    # Validate URLs
-    if args.scrape:
-        if not args.base_url.startswith(('http://', 'https://')):
-            logging.error("Base URL must start with http:// or https://")
+    # Check data source requirements
+    if args.data_source == 'web-scraper':
+        if not args.scrape and not args.data_file:
+            logging.error("For web-scraper: either --scrape must be enabled or --data-file must be provided")
             sys.exit(1)
+        
+        if args.scrape and args.data_file:
+            logging.warning("Both --scrape and --data-file provided. Using scraping mode.")
+        
+        # Validate URLs for web scraping
+        if args.scrape:
+            if not args.base_url or not args.base_url.startswith(('http://', 'https://')):
+                logging.error("Base URL must start with http:// or https:// for web scraping")
+                sys.exit(1)
+    
+    elif args.data_source == 'drupal-taxonomy':
+        if not args.base_term_id:
+            logging.error("For drupal-taxonomy: --base-term-id is required")
+            sys.exit(1)
+        
+        if args.base_term_id <= 0:
+            logging.error("Base term ID must be a positive integer")
+            sys.exit(1)
+    
+    else:
+        logging.error(f"Unknown data source: {args.data_source}")
+        sys.exit(1)
     
     # Validate depth
     if args.max_depth < 0:
@@ -112,37 +128,46 @@ def create_argument_parser() -> argparse.ArgumentParser:
         Configured ArgumentParser instance
     """
     parser = argparse.ArgumentParser(
-        description='Generate interactive HTML graphs of web pages and links',
+        description='Generate interactive HTML graphs of web pages and links or Drupal taxonomy hierarchies',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Scrape a website and save data + generate interactive graph
-  python -m web_graph_generator --base-url https://example.com --scrape --max-depth 3 --output-data graph_data.json --data-format json --output-image graph.html
+  python -m web_graph_generator --data-source web-scraper --base-url https://example.com --scrape --max-depth 3 --output-data graph_data.json --data-format json --output-image graph.html
 
-  # Load existing data and generate interactive graph
-  python -m web_graph_generator --base-url https://example.com --data-file graph_data.json --output-image graph.html
+  # Load existing web scraping data and generate interactive graph
+  python -m web_graph_generator --data-source web-scraper --base-url https://example.com --data-file graph_data.json --output-image graph.html
 
-  # Scrape with URL filtering and CSS selector filtering
-  python -m web_graph_generator --base-url https://example.com --scrape --skip-patterns skip_urls.txt --skip-selectors skip_elements.txt --output-image graph.html --verbose
+  # Extract Drupal taxonomy hierarchy (Lando defaults)
+  python -m web_graph_generator --data-source drupal-taxonomy --base-term-id 123 --base-url https://example.com --max-depth 4 --output-image taxonomy.html
 
-  # Scrape with no cycles
-  python -m web_graph_generator --base-url https://example.com --scrape --no-cycles --output-image graph.html --verbose
+  # Extract taxonomy with custom database settings
+  python -m web_graph_generator --data-source drupal-taxonomy --base-term-id 45 --base-url https://detroitmi.gov --db-host localhost --db-name my_drupal --db-user myuser --db-password mypass --output-image departments.html
+
+  # Test database connection
+  python -m web_graph_generator --data-source drupal-taxonomy --test-db-connection --db-host database --db-name drupal10
         """
     )
     
-    # Required arguments
+    # Data source selection
     parser.add_argument(
-        '--base-url',
-        required=True,
-        help='Base URL to start crawling from'
+        '--data-source',
+        choices=['web-scraper', 'drupal-taxonomy'],
+        default='web-scraper',
+        help='Data source type (default: web-scraper)'
     )
     
-    # Optional arguments
+    # Common arguments
+    parser.add_argument(
+        '--base-url',
+        help='Base URL for the site (required for web-scraper, optional for drupal-taxonomy for URL construction)'
+    )
+    
     parser.add_argument(
         '--max-depth',
         type=int,
         default=2,
-        help='Maximum depth to traverse from base URL (default: 2)'
+        help='Maximum depth to traverse (default: 2)'
     )
     
     parser.add_argument(
@@ -151,111 +176,242 @@ Examples:
         help='Enable verbose logging'
     )
     
-    parser.add_argument(
+    # Web scraper arguments
+    web_group = parser.add_argument_group('Web Scraper Options')
+    web_group.add_argument(
+        '--scrape',
+        action='store_true',
+        help='Enable web scraping mode (for web-scraper data source)'
+    )
+    
+    web_group.add_argument(
+        '--data-file',
+        help='Path to pre-existing serialized data file (for web-scraper when not scraping)'
+    )
+    
+    web_group.add_argument(
         '--skip-patterns',
         help='File containing regex patterns of URLs to skip'
     )
     
-    parser.add_argument(
+    web_group.add_argument(
         '--skip-selectors',
         help='File containing CSS selectors for HTML elements to skip when extracting links'
     )
     
-    # Scraping options
-    parser.add_argument(
-        '--scrape',
-        action='store_true',
-        help='Enable web scraping mode'
-    )
-    
-    parser.add_argument(
-        '--data-file',
-        help='Path to pre-existing serialized data file (required if --scrape not used)'
-    )
-    
-    # Graph options
-    parser.add_argument(
-        '--allow-cycles',
-        action='store_true',
-        default=True,
-        help='Allow cycles in the graph (default: True)'
-    )
-    
-    parser.add_argument(
-        '--no-cycles',
-        action='store_true',
-        help='Disable cycles in the graph'
-    )
-    
-    # Output options
-    parser.add_argument(
-        '--output-data',
-        help='Output path for serialized data (only used with --scrape)'
-    )
-    
-    parser.add_argument(
-        '--data-format',
-        choices=['pickle', 'json'],
-        default='pickle',
-        help='Format for serialized data output (default: pickle)'
-    )
-    
-    parser.add_argument(
-        '--output-image',
-        default='graph.html',
-        help='Output path for interactive HTML graph (default: graph.html)'
-    )
-    
-    # Visualization options
-    parser.add_argument(
-        '--layout',
-        choices=['spring', 'circular', 'shell', 'kamada_kawai', 'random', 'hierarchical'],
-        default='spring',
-        help='Graph layout algorithm (default: spring)'
-    )
-    
-    parser.add_argument(
-        '--color-scheme',
-        choices=['default', 'degree', 'pagerank', 'depth'],
-        default='default',
-        help='Node color scheme (default: default)'
-    )
-    
-    parser.add_argument(
-        '--node-size',
-        choices=['constant', 'degree', 'pagerank'],
-        default='constant',
-        help='Node size metric (default: constant)'
-    )
-    
-    parser.add_argument(
-        '--show-labels',
-        action='store_true',
-        help='Force show node labels'
-    )
-    
-    parser.add_argument(
-        '--hide-labels',
-        action='store_true',
-        help='Force hide node labels'
-    )
-    
-    # Scraping options
-    parser.add_argument(
+    web_group.add_argument(
         '--delay',
         type=float,
         default=1.0,
         help='Delay between requests in seconds (default: 1.0)'
     )
     
-    parser.add_argument(
+    web_group.add_argument(
         '--timeout',
         type=int,
         default=10,
         help='Request timeout in seconds (default: 10)'
     )
     
+    # Drupal taxonomy arguments
+    drupal_group = parser.add_argument_group('Drupal Taxonomy Options')
+    drupal_group.add_argument(
+        '--base-term-id',
+        type=int,
+        help='Starting taxonomy term ID (required for drupal-taxonomy)'
+    )
+    
+    drupal_group.add_argument(
+        '--db-host',
+        default='database',
+        help='Database host (default: database - for Lando)'
+    )
+    
+    drupal_group.add_argument(
+        '--db-port',
+        type=int,
+        default=3306,
+        help='Database port (default: 3306)'
+    )
+    
+    drupal_group.add_argument(
+        '--db-name',
+        default='drupal10',
+        help='Database name (default: drupal10)'
+    )
+    
+    drupal_group.add_argument(
+        '--db-user',
+        default='drupal10',
+        help='Database user (default: drupal10)'
+    )
+    
+    drupal_group.add_argument(
+        '--db-password',
+        default='drupal10',
+        help='Database password (default: drupal10)'
+    )
+    
+    drupal_group.add_argument(
+        '--test-db-connection',
+        action='store_true',
+        help='Test database connection and exit'
+    )
+    
+    # Graph options
+    graph_group = parser.add_argument_group('Graph Options')
+    graph_group.add_argument(
+        '--allow-cycles',
+        action='store_true',
+        default=True,
+        help='Allow cycles in the graph (default: True)'
+    )
+    
+    graph_group.add_argument(
+        '--no-cycles',
+        action='store_true',
+        help='Disable cycles in the graph'
+    )
+    
+    # Output options
+    output_group = parser.add_argument_group('Output Options')
+    output_group.add_argument(
+        '--output-data',
+        help='Output path for serialized data'
+    )
+    
+    output_group.add_argument(
+        '--data-format',
+        choices=['pickle', 'json'],
+        default='pickle',
+        help='Format for serialized data output (default: pickle)'
+    )
+    
+    output_group.add_argument(
+        '--output-image',
+        default='graph.html',
+        help='Output path for interactive HTML graph (default: graph.html)'
+    )
+    
+    # Visualization options
+    viz_group = parser.add_argument_group('Visualization Options')
+    viz_group.add_argument(
+        '--layout',
+        choices=['spring', 'circular', 'shell', 'kamada_kawai', 'random', 'hierarchical'],
+        default='spring',
+        help='Graph layout algorithm (default: spring)'
+    )
+    
+    viz_group.add_argument(
+        '--color-scheme',
+        choices=['default', 'degree', 'pagerank', 'depth'],
+        default='default',
+        help='Node color scheme (default: default)'
+    )
+    
+    viz_group.add_argument(
+        '--node-size',
+        choices=['constant', 'degree', 'pagerank'],
+        default='constant',
+        help='Node size metric (default: constant)'
+    )
+    
+    viz_group.add_argument(
+        '--show-labels',
+        action='store_true',
+        help='Force show node labels'
+    )
+    
+    viz_group.add_argument(
+        '--hide-labels',
+        action='store_true',
+        help='Force hide node labels'
+    )
+    
     return parser
+
+
+def extract_drupal_taxonomy(args: argparse.Namespace) -> tuple[dict, dict]:
+    """
+    Extract Drupal taxonomy hierarchy and return graph data and metadata.
+    
+    Args:
+        args: Command line arguments
+        
+    Returns:
+        Tuple of (graph_data, metadata)
+    """
+    logging.info("Starting Drupal taxonomy extraction mode")
+    
+    # Build database configuration
+    db_config = {
+        'host': args.db_host,
+        'port': args.db_port,
+        'database': args.db_name,
+        'user': args.db_user,
+        'password': args.db_password,
+        'charset': 'utf8mb4',
+        'use_unicode': True,
+        'autocommit': True
+    }
+    
+    # Test connection if requested
+    if args.test_db_connection:
+        success = test_connection(db_config)
+        if success:
+            logging.info("Database connection test successful!")
+            sys.exit(0)
+        else:
+            logging.error("Database connection test failed!")
+            sys.exit(1)
+    
+    # Create taxonomy extractor
+    extractor = DrupalTaxonomyExtractor(
+        db_config=db_config,
+        base_term_id=args.base_term_id,
+        max_depth=args.max_depth,
+        base_url=args.base_url
+    )
+    
+    try:
+        # Connect and validate base term
+        extractor.connect()
+        
+        if not extractor.validate_term_exists(args.base_term_id):
+            logging.error(f"Base term ID {args.base_term_id} does not exist in database")
+            sys.exit(1)
+        
+        # Get term info for logging
+        term_info = extractor.get_term_info(args.base_term_id)
+        if term_info:
+            logging.info(f"Starting from term: {term_info['name']} (ID: {term_info['tid']}, Vocabulary: {term_info['vocabulary_name']})")
+        
+        # Extract taxonomy hierarchy
+        graph_data = extractor.get_taxonomy_hierarchy()
+        
+        # Log extraction statistics
+        stats = extractor.get_statistics()
+        logging.info(f"Extraction statistics: {stats}")
+        
+        # Collect metadata for visualization
+        metadata = {
+            'data_source': 'drupal-taxonomy',
+            'base_term_id': args.base_term_id,
+            'base_term_info': term_info,
+            'max_depth': args.max_depth,
+            'database': args.db_name,
+            'extraction_stats': stats
+        }
+        
+        # Save data if requested
+        if args.output_data:
+            DataSerializer.save_graph_data(graph_data, args.output_data, args.data_format)
+        
+        return graph_data, metadata
+        
+    finally:
+        # Clean up database connection
+        extractor.close()
 
 
 def scrape_website(args: argparse.Namespace) -> tuple[dict, dict]:
@@ -300,10 +456,12 @@ def scrape_website(args: argparse.Namespace) -> tuple[dict, dict]:
         
         # Collect metadata for visualization
         metadata = {
+            'data_source': 'web-scraper',
             'max_depth': args.max_depth + 1,
             'url_patterns': url_filter.get_patterns_html() if url_filter else 'None',
             'css_selectors': css_filter.get_selectors_html() if css_filter else 'None',
-            'allow_cycles': allow_cycles
+            'allow_cycles': allow_cycles,
+            'scraping_stats': stats
         }
         
         # Save data if requested
@@ -349,6 +507,8 @@ def load_existing_data(args: argparse.Namespace) -> tuple[dict, dict]:
     
     # Collect metadata for visualization
     metadata = {
+        'data_source': 'web-scraper-file',
+        'data_file': args.data_file,
         'max_depth': args.max_depth + 1,
         'url_patterns': url_filter.get_patterns_html() if url_filter else 'None',
         'css_selectors': css_filter.get_selectors_html() if css_filter else 'None',
@@ -398,12 +558,21 @@ def create_visualization(graph: 'nx.DiGraph', args: argparse.Namespace, metadata
     Args:
         graph: NetworkX DiGraph
         args: Command line arguments
-        metadata: Metadata about scraping parameters
+        metadata: Metadata about scraping/extraction parameters
     """
     logging.info("Creating visualization")
     
+    # Use base URL from args, or extract from metadata if available
+    base_url = args.base_url
+    if not base_url and args.data_source == 'drupal-taxonomy':
+        # For taxonomy without base URL, use a generic identifier
+        term_info = metadata.get('base_term_info', {})
+        base_url = f"Taxonomy: {term_info.get('name', f'Term {args.base_term_id}')}"
+    elif not base_url:
+        base_url = "Unknown"
+    
     # Create visualizer with metadata
-    visualizer = GraphVisualizer(graph, args.base_url, metadata)
+    visualizer = GraphVisualizer(graph, base_url, metadata)
     
     # Get visualization recommendations
     viz_stats = visualizer.get_visualization_stats()
@@ -439,11 +608,17 @@ def main():
     validate_arguments(args)
     
     try:
-        # Get graph data and metadata
-        if args.scrape:
-            graph_data, metadata = scrape_website(args)
+        # Get graph data and metadata based on data source
+        if args.data_source == 'drupal-taxonomy':
+            graph_data, metadata = extract_drupal_taxonomy(args)
+        elif args.data_source == 'web-scraper':
+            if args.scrape:
+                graph_data, metadata = scrape_website(args)
+            else:
+                graph_data, metadata = load_existing_data(args)
         else:
-            graph_data, metadata = load_existing_data(args)
+            logging.error(f"Unknown data source: {args.data_source}")
+            sys.exit(1)
         
         # Create graph
         graph = create_graph(graph_data, args)

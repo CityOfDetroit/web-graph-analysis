@@ -224,18 +224,36 @@ class GraphVisualizer:
         """
         lines = []
         
-        # Add search depth
-        max_depth = self.metadata.get('max_depth', 'None')
-        lines.append(f"<b>Search Depth</b>:<br> {max_depth}")
+        # Add data source info
+        data_source = self.metadata.get('data_source', 'unknown')
+        if data_source == 'drupal-taxonomy':
+            # Taxonomy-specific metadata
+            base_term_info = self.metadata.get('base_term_info', {})
+            term_name = base_term_info.get('name', 'Unknown')
+            term_id = self.metadata.get('base_term_id', 'Unknown')
+            vocabulary = base_term_info.get('vocabulary_name', 'Unknown')
+            database = self.metadata.get('database', 'Unknown')
+            
+            lines.append(f"<b>Data Source:</b> Drupal Taxonomy")
+            lines.append(f"<b>Base Term:</b> {term_name} (ID: {term_id})")
+            lines.append(f"<b>Vocabulary:</b> {vocabulary}")
         
-        # Add URL regex patterns info
-        url_patterns = self.metadata.get('url_patterns', 'None')
-        lines.append(f"<b>URL Filters</b>:<br> {url_patterns}")
-        
-        # Add CSS selectors info
-        css_selectors = self.metadata.get('css_selectors', 'None')
-        lines.append(f"<b>CSS Filters</b>:<br> {css_selectors}")
+        elif data_source == 'web-scraper':
+            # Web scraper metadata
+            lines.append(f"<b>Data Source:</b> Web Scraper")
+            
+            # Add URL regex patterns info
+            url_patterns = self.metadata.get('url_patterns', 'None')
+            lines.append(f"<b>URL Filters:</b><br> {url_patterns}")
+            
+            # Add CSS selectors info
+            css_selectors = self.metadata.get('css_selectors', 'None')
+            lines.append(f"<b>CSS Filters:</b><br> {css_selectors}")
 
+        # Add search depth (common to all sources)
+        max_depth = self.metadata.get('max_depth', 'Unknown')
+        lines.append(f"<b>Max Depth:</b> {max_depth}")
+        
         # Add graph stats
         lines.append(f"<b>Nodes:</b> {self.graph.number_of_nodes()}, <b>Edges:</b> {self.graph.number_of_edges()}")
         
