@@ -300,7 +300,7 @@ def scrape_website(args: argparse.Namespace) -> tuple[dict, dict]:
         
         # Collect metadata for visualization
         metadata = {
-            'max_depth': args.max_depth,
+            'max_depth': args.max_depth + 1,
             'url_patterns': url_filter.get_patterns_html() if url_filter else 'None',
             'css_selectors': css_filter.get_selectors_html() if css_filter else 'None',
             'allow_cycles': allow_cycles
@@ -349,7 +349,7 @@ def load_existing_data(args: argparse.Namespace) -> tuple[dict, dict]:
     
     # Collect metadata for visualization
     metadata = {
-        'max_depth': args.max_depth,
+        'max_depth': args.max_depth + 1,
         'url_patterns': url_filter.get_patterns_html() if url_filter else 'None',
         'css_selectors': css_filter.get_selectors_html() if css_filter else 'None',
         'allow_cycles': allow_cycles
