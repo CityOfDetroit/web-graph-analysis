@@ -209,7 +209,7 @@ Examples:
     # Visualization options
     parser.add_argument(
         '--layout',
-        choices=['spring', 'circular', 'shell', 'kamada_kawai', 'random'],
+        choices=['spring', 'circular', 'shell', 'kamada_kawai', 'random', 'hierarchical'],
         default='spring',
         help='Graph layout algorithm (default: spring)'
     )

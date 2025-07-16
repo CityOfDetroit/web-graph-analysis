@@ -64,7 +64,7 @@ class GraphVisualizer:
             IOError: If visualization cannot be saved
         """
         # Validate inputs
-        valid_layouts = ['spring', 'circular', 'shell', 'kamada_kawai', 'random']
+        valid_layouts = ['spring', 'circular', 'shell', 'kamada_kawai', 'random', 'hierarchical']
         if layout not in valid_layouts:
             raise ValueError(f"Invalid layout: {layout}. Valid options: {valid_layouts}")
         
@@ -264,8 +264,96 @@ class GraphVisualizer:
             return nx.kamada_kawai_layout(self.graph)
         elif layout == 'random':
             return nx.random_layout(self.graph, seed=42)
+        elif layout == 'hierarchical':
+            return self._generate_hierarchical_layout()
         else:
             return nx.spring_layout(self.graph, seed=42)
+
+    def _generate_hierarchical_layout(self) -> Dict[str, Tuple[float, float]]:
+        """
+        Generate hierarchical layout based on domain and depth from base URL.
+        
+        Returns:
+            Dictionary mapping nodes to (x, y) positions
+        """
+        from urllib.parse import urlparse
+        import math
+        
+        # Parse base domain
+        base_domain = urlparse(self.base_url).netloc
+        
+        # Categorize nodes by domain
+        internal_nodes = []
+        external_nodes = []
+        
+        for node in self.graph.nodes():
+            node_domain = urlparse(node).netloc
+            if node_domain == base_domain:
+                internal_nodes.append(node)
+            else:
+                external_nodes.append(node)
+        
+        # Calculate distances from base URL for internal nodes
+        try:
+            # Use undirected graph for distance calculation
+            undirected = self.graph.to_undirected()
+            if self.base_url in undirected:
+                distances = nx.single_source_shortest_path_length(undirected, self.base_url)
+            else:
+                # Fallback: use any internal node as root
+                distances = nx.single_source_shortest_path_length(undirected, internal_nodes[0]) if internal_nodes else {}
+        except:
+            distances = {}
+        
+        # Group internal nodes by depth level
+        levels = {}
+        max_level = 0
+        for node in internal_nodes:
+            level = distances.get(node, 99)  # Use high number for unreachable nodes
+            if level not in levels:
+                levels[level] = []
+            levels[level].append(node)
+            max_level = max(max_level, level)
+        
+        pos = {}
+        
+        # Layout internal nodes hierarchically
+        y_spacing = 2.0
+        for level, nodes in levels.items():
+            y_pos = -level * y_spacing  # Negative so base URL is at top
+            
+            if len(nodes) == 1:
+                pos[nodes[0]] = (0, y_pos)
+            else:
+                # Use spring layout for nodes within each level
+                subgraph = self.graph.subgraph(nodes)
+                if subgraph.number_of_edges() > 0:
+                    sublayout = nx.spring_layout(subgraph, k=1.5, iterations=50)
+                    # Scale and position the sublayout
+                    for node, (x, y) in sublayout.items():
+                        pos[node] = (x * 3, y_pos + y * 0.5)  # Spread horizontally, small vertical jitter
+                else:
+                    # No edges between nodes at this level, space evenly
+                    x_spacing = 4.0 / max(1, len(nodes) - 1) if len(nodes) > 1 else 0
+                    for i, node in enumerate(nodes):
+                        x_pos = -2.0 + i * x_spacing
+                        pos[node] = (x_pos, y_pos)
+        
+        # Layout external nodes in a separate area
+        if external_nodes:
+            # Position external nodes to the right side
+            external_y_range = max_level * y_spacing + 2
+            external_subgraph = self.graph.subgraph(external_nodes)
+            
+            if external_subgraph.number_of_nodes() > 1:
+                external_layout = nx.spring_layout(external_subgraph, k=2, iterations=30)
+                # Scale and offset to right side
+                for node, (x, y) in external_layout.items():
+                    pos[node] = (5 + x * 2, (y * external_y_range) - external_y_range/2)
+            else:
+                pos[external_nodes[0]] = (6, 0)
+        
+        return pos
     
     def _get_node_colors(self, color_scheme: str) -> List[float]:
         """
@@ -494,8 +582,11 @@ class GraphVisualizer:
         elif stats['nodes'] <= 50:
             stats['recommended_layout'] = 'spring'
             stats['recommended_labels'] = True
+        elif stats['nodes'] <= 200:
+            stats['recommended_layout'] = 'hierarchical'
+            stats['recommended_labels'] = False
         else:
-            stats['recommended_layout'] = 'spring'
+            stats['recommended_layout'] = 'hierarchical'
             stats['recommended_labels'] = False
         
         return stats
